@@ -1,14 +1,14 @@
+import numpy as np
 import random
 import matplotlib.pyplot as plt
 
-# Parâmetros gerais da simulação
-SIM_TIME = 1000  # tempo total de simulação (em unidades de tempo discretas)
-NUM_NODES = 10   # número de nós
-DISTANCE_THRESHOLD = 2  # distância máxima para um nó ser considerado "visível" (senão é oculto)
-FRAME_DURATION = 5  # tempo de transmissão de um quadro
-WAIT_MAX = 10       # tempo máximo de espera (backoff)
+SIM_TIME = 1000
+NUM_NODES = 6
+VISIBILITY_RANGE = 1  
+FRAME_DURATION = 5
+BACKOFF_MAX = 10
+random.seed(42)
 
-# Geração de eventos aleatórios de chegada de quadros
 def generate_traffic(rate, sim_time):
     traffic = [[] for _ in range(NUM_NODES)]
     for t in range(sim_time):
@@ -17,19 +17,11 @@ def generate_traffic(rate, sim_time):
                 traffic[i].append(t)
     return traffic
 
-# Checa se há colisão entre os transmissores ativos
-def detect_collisions(active_nodes):
-    if len(active_nodes) <= 1:
-        return set(), active_nodes
-    return set(active_nodes), []
-
-# Define vizinhos visíveis de cada nó (para CSMA com nós ocultos)
 def get_visible_nodes(index):
     return [i for i in range(NUM_NODES)
-            if abs(i - index) <= DISTANCE_THRESHOLD and i != index]
+            if abs(i - index) <= VISIBILITY_RANGE and i != index]
 
-# Simulação do CSMA com nós ocultos
-def csma_simulation(rate):
+def csma_sim(rate):
     traffic = generate_traffic(rate, SIM_TIME)
     queue = [list(t) for t in traffic]
     backoff = [0] * NUM_NODES
@@ -47,19 +39,17 @@ def csma_simulation(rate):
 
             if queue[i] and queue[i][0] <= t:
                 visible = get_visible_nodes(i)
-                medium_busy = any(transmitting[v] > 0 for v in visible)
-
-                if not medium_busy:
+                busy = any(transmitting[v] > 0 for v in visible)
+                if not busy:
                     active_nodes.append(i)
 
-        collided, success = detect_collisions(active_nodes)
-
-        for i in collided:
-            backoff[i] = random.randint(1, WAIT_MAX)
-            collisions += 1
-            queue[i].pop(0)
-
-        for i in success:
+        if len(active_nodes) > 1:
+            collisions += len(active_nodes)
+            for i in active_nodes:
+                backoff[i] = random.randint(1, BACKOFF_MAX)
+                queue[i].pop(0)
+        elif len(active_nodes) == 1:
+            i = active_nodes[0]
             transmitting[i] = FRAME_DURATION
             successes += 1
             queue[i].pop(0)
@@ -68,14 +58,13 @@ def csma_simulation(rate):
             if transmitting[i] > 0:
                 transmitting[i] -= 1
 
-    return successes, collisions
+    return successes
 
-# Simulação do MACA com RTS/CTS
-def maca_simulation(rate):
+def maca_sim(rate):
     traffic = generate_traffic(rate, SIM_TIME)
     queue = [list(t) for t in traffic]
     transmitting = [0] * NUM_NODES
-    rts_cts_wait = [0] * NUM_NODES
+    backoff = [0] * NUM_NODES
     collisions = 0
     successes = 0
 
@@ -84,42 +73,33 @@ def maca_simulation(rate):
             if transmitting[i] > 0:
                 transmitting[i] -= 1
                 continue
-
-            if rts_cts_wait[i] > 0:
-                rts_cts_wait[i] -= 1
+            if backoff[i] > 0:
+                backoff[i] -= 1
                 continue
-
             if queue[i] and queue[i][0] <= t:
                 receiver = (i + 1) % NUM_NODES
-                # Verifica se alguém nos arredores do receptor está transmitindo
-                visible_to_receiver = get_visible_nodes(receiver)
-                interference = any(transmitting[v] > 0 for v in visible_to_receiver)
-
-                if not interference:
+                interferers = [j for j in get_visible_nodes(receiver) if j != i and transmitting[j] > 0]
+                if not interferers:
                     transmitting[i] = FRAME_DURATION
                     successes += 1
                     queue[i].pop(0)
                 else:
+                    backoff[i] = random.randint(1, BACKOFF_MAX)
                     collisions += 1
-                    rts_cts_wait[i] = random.randint(1, WAIT_MAX)
                     queue[i].pop(0)
+    return successes
 
-    return successes, collisions
+arrival_rates = np.linspace(0.05, 0.5, 10)
+csma_successes = [csma_sim(r) for r in arrival_rates]
+maca_successes = [maca_sim(r) for r in arrival_rates]
 
-# Coletar dados para diferentes taxas
-rates = [i / 20 for i in range(1, 11)]
-csma_results = [csma_simulation(r) for r in rates]
-maca_results = [maca_simulation(r) for r in rates]
-
-# Plotando os resultados
-success_csma = [s for s, c in csma_results]
-success_maca = [s for s, c in maca_results]
-
-plt.plot(rates, success_csma, label='CSMA (nós ocultos)')
-plt.plot(rates, success_maca, label='MACA (RTS/CTS)')
-plt.xlabel('Taxa de chegada de quadros')
-plt.ylabel('Quadros entregues com sucesso')
-plt.title('Desempenho do CSMA vs MACA com nós ocultos')
+plt.figure(figsize=(8, 5))
+plt.plot(arrival_rates, csma_successes, marker='o', label="CSMA (nós ocultos)")
+plt.plot(arrival_rates, maca_successes, marker='s', label="MACA (RTS/CTS)")
+plt.title("Desempenho do CSMA vs MACA com nós ocultos")
+plt.xlabel("Taxa de chegada de quadros")
+plt.ylabel("Quadros entregues com sucesso")
 plt.grid(True)
 plt.legend()
+plt.tight_layout()
 plt.show()
